@@ -8,6 +8,7 @@ from PIL import Image
 from torchvision import transforms
 from torch.utils.data import DataLoader, Dataset
 from torch.optim.lr_scheduler import StepLR
+import torch.nn.functional as F
 
 
 class JesterDataset(Dataset):
@@ -61,40 +62,48 @@ class JesterDataset(Dataset):
         label = self.label_dict[label]
         return images, label
 
+def collate_fn(batch):
+    images, labels = zip(*batch)
+    # Determine the maximum sequence length in the batch
+    max_length = max([img.size(0) for img in images])
+    print(max_length)
+    # Pad sequences along the temporal dimension
+    padded_images = []
+    for img in images:
+        padding = (0, 0, 0, 0, 0, 0, max_length - img.size(0), 0)  # Pad temporal dimension
+        padded_img = F.pad(img, padding, "constant", 0)
+        padded_images.append(padded_img)
+    
+    # Stack the padded images into a batch
+    padded_images = torch.stack(padded_images, dim=0)
+    labels = torch.tensor(labels)
+    return padded_images, labels
 
-class MyConv(nn.Module):
+class CNNLSTM(nn.Module):
     def __init__(self, num_classes=27):
-        super(MyConv, self).__init__()
-        self.cnn_layer = nn.Sequential(
-            nn.Conv2d(in_channels=3, out_channels=32, kernel_size=7, stride=2, padding=0),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2, padding=0),
-
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=5, stride=1, padding=2),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2, padding=0),
-
-            nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3, stride=1, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
+        super(CNNLSTM, self).__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2)
         )
+        self.lstm = nn.LSTM(256 * 12 * 12, 512, batch_first=True)
+        self.fc = nn.Linear(512, num_classes)
 
-        self.linear_layer = nn.Sequential(
-            nn.Dropout(0.3, inplace=False),
-            nn.Linear(128 * 7 * 7, 128 * 7 * 7),
-            nn.Linear(128 * 7 * 7, 512),
-            nn.Linear(512, num_classes)
-        )
-
-    def forward(self, x, return_intermediate=False):
-        x = self.cnn_layer(x)
-        x = x.view(x.size(0), -1)
-        x = self.linear_layer(x)
-        return x
-
+    def forward(self, x):
+        batch_size, seq_length, c, h, w = x.size()
+        cnn_out = self.cnn(x.view(batch_size * seq_length, c, h, w))
+        cnn_out = cnn_out.view(batch_size, seq_length, -1)
+        lstm_out, _ = self.lstm(cnn_out)
+        lstm_out = lstm_out[:, -1, :]
+        out = self.fc(lstm_out)
+        return out
 
 def evaluate(model, test_loader, criterion, device):
     model.eval()
@@ -177,13 +186,14 @@ def main(args):
     batch_size = 64
     num_workers = 2
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True, collate_fn=collate_fn)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False, collate_fn=collate_fn)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Using device: {device}')
 
-    model = MyConv(num_classes=len(train_dataset.label_dict))
+    # model = MyConv(num_classes=len(train_dataset.label_dict))
+    model = CNNLSTM(num_classes=len(train_dataset.label_dict))
 
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
     criterion = nn.CrossEntropyLoss()
