@@ -91,7 +91,7 @@ class CNNLSTM(nn.Module):
             nn.MaxPool2d(kernel_size=2, stride=2),
             nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2)
+            nn.AdaptiveAvgPool2d((12, 12))  # Fixed spatial size
         )
         self.lstm = nn.LSTM(256 * 12 * 12, 512, batch_first=True)
         self.fc = nn.Linear(512, num_classes)
@@ -138,7 +138,6 @@ def train(model, train_loader, val_loader, optimizer, criterion, device, num_epo
             for inputs, labels in train_loader:
                 inputs = inputs.to(device)
                 labels = labels.to(device)
-
                 optimizer.zero_grad()
                 logits = model(inputs)
                 loss = criterion(logits, labels)
@@ -183,7 +182,7 @@ def main(args):
     train_dataset = JesterDataset(data_root, 'train', transform=data_transform)
     val_dataset = JesterDataset(data_root, 'validation', transform=data_transform)
 
-    batch_size = 64
+    batch_size = 8
     num_workers = 2
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True, collate_fn=collate_fn)
