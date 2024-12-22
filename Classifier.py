@@ -11,11 +11,14 @@ from torch.utils.checkpoint import checkpoint
 from torch.optim.lr_scheduler import StepLR
 import torch.nn.functional as F
 
+# Set environment variables for PyTorch CUDA configuration and clear CUDA cache
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 torch.cuda.empty_cache()
 
+# Define the JesterDataset class
+
 class JesterDataset(Dataset):
-    def __init__(self, root_dir,  split, transform=None):
+    def __init__(self, root_dir, split, transform=None):
         """
         Initialize the Jester dataset with the root directory for the images,
         the CSV file containing the labels, and an optional data transformation.
@@ -31,7 +34,8 @@ class JesterDataset(Dataset):
         self.split = split
         self.transform = transform
         self.data = []
-                    
+        
+        # Load data from CSV file
         with open('jester-v1-' + self.split + '.csv') as f:
             reader = csv.reader(f, delimiter=';')
             for row in reader:
@@ -39,6 +43,7 @@ class JesterDataset(Dataset):
                 label = row[1]
                 self.data.append((video_dir, label))
 
+        # Create label dictionary
         self.label_dict = self._create_label_dict()
 
     def _create_label_dict(self):
@@ -65,11 +70,11 @@ class JesterDataset(Dataset):
         label = self.label_dict[label]
         return images, label
 
+# Define custom collate function to pad sequences to the same length within each batch
 def collate_fn(batch):
     images, labels = zip(*batch)
     # Determine the maximum sequence length in the batch
     max_length = max([img.size(0) for img in images])
-    print(max_length)
     # Pad sequences along the temporal dimension
     padded_images = []
     for img in images:
@@ -82,6 +87,7 @@ def collate_fn(batch):
     labels = torch.tensor(labels)
     return padded_images, labels
 
+# Define the CNNLSTM model class
 class CNNLSTM(nn.Module):
     def __init__(self, num_classes=27):
         super(CNNLSTM, self).__init__()
@@ -109,6 +115,7 @@ class CNNLSTM(nn.Module):
         out = self.fc(lstm_out)
         return out
 
+# Define the evaluate function to evaluate the model on the test dataset
 def evaluate(model, test_loader, criterion, device):
     model.eval()
     with torch.inference_mode():
@@ -133,7 +140,7 @@ def evaluate(model, test_loader, criterion, device):
 
     return avg_loss, accuracy
 
-
+# Define the train function to train the model
 def train(model, train_loader, val_loader, optimizer, criterion, device, num_epochs, scheduler):
     model = model.to(device)
     for epoch in range(num_epochs):
@@ -157,7 +164,7 @@ def train(model, train_loader, val_loader, optimizer, criterion, device, num_epo
 
         scheduler.step()
 
-
+# Define the test function to test the model on the test dataset
 def test(model, test_loader, device):
     model = model.to(device)
     model.eval()
@@ -171,38 +178,45 @@ def test(model, test_loader, device):
             all_preds.extend(preds)
     return all_preds
 
-
+# Define the main function
 def main(args):
+    # Mean and std values used for ImageNet
     image_net_mean = torch.Tensor([0.485, 0.456, 0.406])
     image_net_std = torch.Tensor([0.229, 0.224, 0.225])
 
+    # Define data transformations
     data_transform = transforms.Compose([
         transforms.ToTensor(),
         transforms.Resize((100, 176)),
         transforms.Normalize(image_net_mean, image_net_std),
     ])
 
-    data_root = r'/home/enricus/Lib/uni/year III/sem I/computer vision/a3/CV-3/20bn-jester-v1'
-
+    # Loacal file path to the dataset, since it is to large to upload to github
+    data_root = r'C:\Users\niels\OneDrive\Documents\Leiden\Year 3\Computer Vision\Assignment 3\20bn-jester-v1'
+    # data_root = r'/home/enricus/Lib/uni/year III/sem I/computer vision/a3/CV-3/20bn-jester-v1'
+    
+    # Load training and validation datasets
     train_dataset = JesterDataset(data_root, 'train', transform=data_transform)
     val_dataset = JesterDataset(data_root, 'validation', transform=data_transform)
 
-    batch_size = 32
-    num_workers = 4
+    # Create data loaders
+    batch_size = 8
+    num_workers = 2
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True, collate_fn=collate_fn)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False, collate_fn=collate_fn)
 
+    # Set device to GPU if available, otherwise use CPU
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f'Using device: {device}')
 
-    # model = MyConv(num_classes=len(train_dataset.label_dict))
-    model = CNNLSTM(num_classes=len(train_dataset.label_dict))
-
+    # Initialize the model, optimizer, loss function, and learning rate scheduler
+    model = CNNLSTM(num_classes=len(train_dataset.label_dict)).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)
     criterion = nn.CrossEntropyLoss()
     scheduler = StepLR(optimizer, step_size=1, gamma=0.1)
 
+    # Train the model if not in test mode, otherwise load checkpoint and test the model
     if not args.test:
         train(model, train_loader, val_loader, optimizer, criterion, device, num_epochs=5, scheduler=scheduler)
         torch.save({'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, 'model2.ckpt')
@@ -214,19 +228,19 @@ def main(args):
         preds = test(model, test_loader, device)
         write_predictions(preds, 'predictions.csv')
 
+# Define the write_predictions function to write predictions to a CSV file
 def write_predictions(preds, filename):
     with open(filename, 'w') as f:
         writer = csv.writer(f, delimiter=',')
         for im, pred in preds:
             writer.writerow((im, pred))
 
-
+# Run the main function
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--test', action='store_true')
     parser.add_argument('--checkpoint', default='model.ckpt')
     args = parser.parse_args()
     main(args)
-    
     
 #               python Classifier.py 
