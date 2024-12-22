@@ -7,9 +7,12 @@ import torch.nn as nn
 from PIL import Image
 from torchvision import transforms
 from torch.utils.data import DataLoader, Dataset
+from torch.utils.checkpoint import checkpoint
 from torch.optim.lr_scheduler import StepLR
 import torch.nn.functional as F
 
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+torch.cuda.empty_cache()
 
 class JesterDataset(Dataset):
     def __init__(self, root_dir,  split, transform=None):
@@ -85,13 +88,14 @@ class CNNLSTM(nn.Module):
         self.cnn = nn.Sequential(
             nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            nn.MaxPool2d(kernel_size=2, stride=2),
             nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=2, stride=2),
+            nn.Conv2d(128, 128, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
             nn.Conv2d(128, 256, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            nn.AdaptiveAvgPool2d((12, 12))  # Fixed spatial size
+            nn.MaxPool2d(kernel_size=2, stride=2)
         )
         self.lstm = nn.LSTM(256 * 12 * 12, 512, batch_first=True)
         self.fc = nn.Linear(512, num_classes)
@@ -107,7 +111,7 @@ class CNNLSTM(nn.Module):
 
 def evaluate(model, test_loader, criterion, device):
     model.eval()
-    with torch.no_grad():
+    with torch.inference_mode():
         total_loss = 0.0
         num_correct = 0
         num_samples = 0
@@ -138,6 +142,7 @@ def train(model, train_loader, val_loader, optimizer, criterion, device, num_epo
             for inputs, labels in train_loader:
                 inputs = inputs.to(device)
                 labels = labels.to(device)
+
                 optimizer.zero_grad()
                 logits = model(inputs)
                 loss = criterion(logits, labels)
@@ -156,7 +161,7 @@ def train(model, train_loader, val_loader, optimizer, criterion, device, num_epo
 def test(model, test_loader, device):
     model = model.to(device)
     model.eval()
-    with torch.no_grad():
+    with torch.inference_mode():
         all_preds = []
         for inputs, labels in test_loader:
             inputs = inputs.to(device)
@@ -177,13 +182,13 @@ def main(args):
         transforms.Normalize(image_net_mean, image_net_std),
     ])
 
-    data_root = r'C:\Users\niels\OneDrive\Documents\Leiden\Year 3\Computer Vision\Assignment 3\20bn-jester-v1'
+    data_root = r'/home/enricus/Lib/uni/year III/sem I/computer vision/a3/CV-3/20bn-jester-v1'
 
     train_dataset = JesterDataset(data_root, 'train', transform=data_transform)
     val_dataset = JesterDataset(data_root, 'validation', transform=data_transform)
 
-    batch_size = 8
-    num_workers = 2
+    batch_size = 32
+    num_workers = 4
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=True, collate_fn=collate_fn)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=num_workers, shuffle=False, collate_fn=collate_fn)
