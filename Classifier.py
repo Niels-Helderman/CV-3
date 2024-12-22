@@ -5,14 +5,16 @@ import torch
 import argparse
 import torch.nn as nn
 from PIL import Image
-from torchvision import transforms
+from torchvision.transform import v2
 from torch.utils.data import DataLoader, Dataset
 from torch.utils.checkpoint import checkpoint
 from torch.optim.lr_scheduler import StepLR
 import torch.nn.functional as F
 
+
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 torch.cuda.empty_cache()
+# torch.cuda.memory._record_memory_history()
 
 class JesterDataset(Dataset):
     def __init__(self, root_dir,  split, transform=None):
@@ -176,11 +178,13 @@ def main(args):
     image_net_mean = torch.Tensor([0.485, 0.456, 0.406])
     image_net_std = torch.Tensor([0.229, 0.224, 0.225])
 
-    data_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Resize((100, 176)),
-        transforms.Normalize(image_net_mean, image_net_std),
-    ])
+    data_transform = v2.Compose([
+        V2.ToImage(),
+        v2.RandomResizedCrop(size=(224, 224), antialias=True),
+        v2.RandomHorizontalFlip(p=0.5),
+        v2.ToDtype(torch.float32, scale=True),
+        v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
 
     data_root = r'/home/enricus/Lib/uni/year III/sem I/computer vision/a3/CV-3/20bn-jester-v1'
 
@@ -227,6 +231,6 @@ if __name__ == "__main__":
     parser.add_argument('--checkpoint', default='model.ckpt')
     args = parser.parse_args()
     main(args)
-    
+    # torch.cuda.memory._dump_snapshot("my_snapshot.pickle")
     
 #               python Classifier.py 
